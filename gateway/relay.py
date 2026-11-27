@@ -1585,8 +1585,11 @@ async def _proxy(path: str, request: Request):
             ROUTER.end(label)
         if status < 500:
             if isinstance(out, dict):
-                if is_vision and requested_model:
-                    out["model"] = requested_model
+                if is_model_call and model:
+                    # Clients (llama.cpp's web UI among them) compare this string with /v1/models ids to
+                    # decide whether the model that answered is still available: report the id kllm routed
+                    # to, never the backend's own name (llama-server answers with its GGUF filename).
+                    out["model"] = model
                 for ch in (out.get("choices") or []):
                     m = ch.get("message") or {}
                     if (not m.get("content")) and m.get("reasoning_content"):
@@ -1630,7 +1633,7 @@ async def _proxy(path: str, request: Request):
     resp_headers["x-kllm-backend"] = label
     meter = _Meter(label, path, payload, t_arrive, client=_client_kind(request))
     if prefix_info: meter.rec["prefix"] = prefix_info
-    return StreamingResponse(_pump(resp, meter, path, label, model_override=requested_model if is_vision else None, session=session), status_code=resp.status_code,
+    return StreamingResponse(_pump(resp, meter, path, label, model_override=model if (is_model_call and model) else None, session=session), status_code=resp.status_code,
                              headers=resp_headers, media_type=resp.headers.get("content-type"))
 
 async def _admit_wait(model, session, pin, t_arrive, sset, on_tick=None, request=None):
@@ -1793,7 +1796,8 @@ def _deferred_stream(path, request, body, payload, model, session, pin, t_arrive
                 return
             active_label = None
             active_resp = None
-            async for chunk in _pump(resp, _Meter(label, path, payload, t_arrive, client=_client_kind(request)), path, label, session=session):
+            async for chunk in _pump(resp, _Meter(label, path, payload, t_arrive, client=_client_kind(request)), path, label,
+                                     model_override=model, session=session):
                 yield chunk
         finally:
             if not task.done():

@@ -54,3 +54,28 @@ def test_pump_no_silence_still_works(monkeypatch):
     monkeypatch.setattr(relay, "PUMP_POLL_SECONDS", 0.05)
     out, meter = _run(silence=0.0)
     assert meter.saw_end and b"ended the response early" not in out
+
+
+def test_pump_names_the_routed_model_not_the_backends_own_name():
+    """llama-server answers with its GGUF file name, which is not a /v1/models id: a UI that matches replies to
+    pickable models by name (llama.cpp's picker) then shows the model as unavailable (2026-11-27)."""
+    class Chatty:
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+
+        async def aiter_raw(self):
+            yield b'data: {"id":"x","model":"Qwen--Qwen3.8-27B.Q4_K_M.gguf","choices":[]}\n\n'
+
+        async def aclose(self):
+            pass
+
+    relay.ROUTER.begin("t:name")
+    meter = relay._Meter("t:name", "v1/chat/completions", {"model": "qwen3.8-27b"})
+
+    async def go():
+        out = b""
+        async for c in relay._pump(Chatty(), meter, "v1/chat/completions", "t:name", model_override="qwen3.8-27b"):
+            out += c
+        return out
+    out = asyncio.run(go())
+    assert b'"model":"qwen3.8-27b"' in out and b"Qwen--Qwen3.8" not in out
